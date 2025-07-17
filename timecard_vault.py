@@ -16,6 +16,9 @@ ACCESS_DB = r"file path"
 TABLE_NAME = "Entries"
 active_treeviews = []
 PDF_contract = ""
+LAST_TOTAL_HOURS = 0  # will hold the latest calculated value for PDF use
+
+
 
 ''' Connect to Access '''
 def get_conn():
@@ -28,18 +31,22 @@ def get_conn():
 
 ''' Clean and Upload Data '''
 def import_timecard(file_path, sheet_name=None, progress_callback=None):
+    # Skip sheets named 'example' (case-insensitive)
+    if sheet_name and sheet_name.strip().lower() == "example":
+        print(f"Skipping sheet named 'example' in {file_path}")
+        return
+
     try:
         df = pd.read_excel(file_path, sheet_name=sheet_name)  # Correct: uses specified sheet
         file_name = os.path.basename(file_path)
         file_name = file_name.replace(" ", "")
         
+        # before upload check for duplicate file
         if duplicate_file(file_name, sheet_name):
             print(f"Duplicate: {file_name} | {sheet_name} — skipping")
             show_duplicate_warning(f"Duplicate: {file_name} ({sheet_name})")
             return
-
-
-        # before upload check for duplicate file
+        
         if not duplicate_file(file_name, sheet_name):
             try:
                 # clean column names
@@ -48,8 +55,8 @@ def import_timecard(file_path, sheet_name=None, progress_callback=None):
                 df = df.dropna(subset=["Totals"])
 
                 # select and rename relevant columns
-                df = df[["Employee ID", "Month", "Year", "Contract Name", "Project Manager", "Totals"]]
-                df.columns = ["Employee_ID", "Month", "Year", "Contract_Name", "Project_Manager", "Hours"]
+                df = df[["Name", "Month", "Year", "Contract Name", "Project Manager", "Totals"]]
+                df.columns = ["Name", "Month", "Year", "Contract_Name", "Project_Manager", "Hours"]
 
                 # remove spaces from data
                 df["Month"] = df["Month"].astype(str).str.replace(" ", "", regex=False)
@@ -57,20 +64,20 @@ def import_timecard(file_path, sheet_name=None, progress_callback=None):
                 df["Project_Manager"] = df["Project_Manager"].astype(str).str.replace(" ", "", regex=False)
                 df["Hours"] = df["Hours"].astype(str).str.replace(" ", "", regex=False)
 
-                # fill down Employee_ID, Month, and Year from the first non-empty cell
+                # fill down Name, Month, and Year from the first non-empty cell
                 # check if values exist
                 try:
-                    df["Employee_ID"] = df["Employee_ID"].dropna().iloc[0]
+                    df["Name"] = df["Name"].dropna().iloc[0]
                     df["Month"] = df["Month"].dropna().iloc[0]
                     df["Year"] = df["Year"].dropna().iloc[0]
                 except IndexError:
-                    print(f"Skipping sheet '{sheet_name}' in '{file_path}' — missing Employee_ID/Month/Year")
+                    print(f"Skipping sheet '{sheet_name}' in '{file_path}' — missing Name/Month/Year")
 
                     # popup UI warning
                     popup = Toplevel()
                     popup.title("Missing Data Warning")
                     popup.geometry("400x100+150+150")
-                    Label(popup, text=f"'{sheet_name}' in {os.path.basename(file_path)}\nis missing Employee ID, Month, or Year.\nSheet skipped.", justify="center", wraplength=380).pack(pady=10)
+                    Label(popup, text=f"'{sheet_name}' in {os.path.basename(file_path)}\nis missing Name, Month, or Year.\nSheet skipped.", justify="center", wraplength=380).pack(pady=10)
     
                     return
                 
@@ -97,14 +104,19 @@ def import_timecard(file_path, sheet_name=None, progress_callback=None):
                 row_count = len(df)
 
                 for i, (_, row) in enumerate(df.iterrows()):
+                    val = str(row.Contract_Name).strip().lower()
+                    if pd.isna(row.Contract_Name) or val == "" or val == "nan":
+                        print(f"Skipping row with missing or invalid contract in sheet '{sheet_name}'")
+                        continue
+
                     cursor.execute(
                         f"""
                         INSERT INTO {TABLE_NAME}
-                        (Employee_ID, Month, Year, Contract_Name, Project_Manager, Hours, Source_File, Sheet_Name)
+                        (Name, Month, Year, Contract_Name, Project_Manager, Hours, Source_File, Sheet_Name)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 
                         """,
-                        row.Employee_ID, row.Month, row.Year,
+                        row.Name, row.Month, row.Year,
                         row.Contract_Name, row.Project_Manager,
                         row.Hours, row.Source_File, row.Sheet_Name
 
@@ -143,6 +155,8 @@ root.geometry("800x600+100+50") # Width x Height + X_offset + Y_offset
 # top
 fram = Frame(root)
 fram.pack(pady=30)
+fram_14 = Frame(root)
+fram_14.pack()
 fram1_25 = Frame(root)
 fram1_25.pack(pady=30)
 # middle
@@ -158,11 +172,11 @@ fram2.pack(pady=10)
 
 # uploading
 # upload progress bar
-progress = Progressbar(fram1_25, orient = HORIZONTAL,
+progress = Progressbar(fram_14, orient = HORIZONTAL,
               length = 100, mode = 'determinate')
 # upload not success label
-duplicate_label = Label(fram, text='Error: Duplicate file, upload unsuccessful.')
-print_error_label = Label(fram, text='Print error.')
+duplicate_label = Label(fram_14, text='Error: Duplicate file, upload unsuccessful.')
+print_error_label = Label(fram_14, text='Print error.')
 # upload button
 ubutt = Button(fram, text='Upload Timecard', padding=10)
 ubutt.pack(side=LEFT)
@@ -190,13 +204,13 @@ sbutt.pack(side=LEFT)
 asbutt = Button(fram1, text='Advanced Search')
 asbutt.pack(side=RIGHT)
 # total hours display
-hours_label = Label(fram1_5, text="Total Hours: 0")
+hours_label = Label(fram1_5, text="Total Hours: " + str(LAST_TOTAL_HOURS))
 hours_label.pack(side=LEFT, padx=10)
 
 
 # search results treeview 
 # to display results
-results_tree = Treeview(root, columns=("Entry_ID","Employee_ID", "Month", "Year", "Contract_Name", "Project_Manager", "Hours", "Source_File"), show="headings")
+results_tree = Treeview(root, columns=("Entry_ID","Name", "Month", "Year", "Contract_Name", "Project_Manager", "Hours", "Source_File"), show="headings")
 for col in results_tree["columns"]:
     results_tree.heading(col, text=col)
     results_tree.column(col, width=100)
@@ -219,7 +233,7 @@ def load_all_data():
         cursor.execute(
             f"""
             SELECT
-                Entry_ID, Employee_ID, [Month], [Year], Contract_Name, Project_Manager, Hours, Source_File
+                Entry_ID, [Name], [Month], [Year], Contract_Name, Project_Manager, Hours, Source_File
             FROM
                 {TABLE_NAME}
             """
@@ -277,12 +291,14 @@ def search(search_text, tree, header, full_data):
 
 # calculate the total hours
 def calculate_hours(search_term):
+    global LAST_TOTAL_HOURS
     # remove spaces from search term
     search_term = edit.get()
     cleaned_search_term = search_term.replace(" ", "")
 
     if not cleaned_search_term:
-        hours_label.configure(text="Total Hours: 0")
+        total_hours = 0
+        hours_label.configure(text="Total Hours: " + str(total_hours))
         return
 
     try:
@@ -306,15 +322,74 @@ def calculate_hours(search_term):
             total_hours += hours
         conn.close()
 
-        hours_label.configure(text=f"Total Hours: {total_hours}")
+        LAST_TOTAL_HOURS = total_hours
+        hours_label.configure(text=f"Total Hours: " + str(total_hours))
+        return total_hours
+        
+
+    except Exception as e:
+        hours_label.configure(text="Total Hours: Error")
+        traceback.print_exc()
+
+# combines search and calculate functions
+def search_and_calculate(event=None):
+    search(edit.get(), results_tree, "Contract_Name", main_tree_data)
+    calculate_hours(edit.get())
+
+# calculate hours from the advanced search
+def advanced_calculate_hours(search_term, month=None, year=None):
+    global LAST_TOTAL_HOURS
+
+    # clean contract name input
+    if not search_term:
+        total_hours = 0
+        hours_label.configure(text="Total Hours: " + str(total_hours))
+        return
+
+    cleaned_search_term = search_term.replace(" ", "")
+    total_hours = 0
+
+    try:
+        total_hours = 0
+        conn = get_conn()
+        cursor = conn.cursor()
+
+        # build WHERE conditions and parameter list dynamically
+        where_clauses = ["Contract_Name LIKE ?"]
+        params = [f"%{cleaned_search_term}%"]
+
+        if month:
+            where_clauses.append("Month = ?")
+            params.append(month)
+
+        if year:
+            where_clauses.append("[Year] = ?")
+            params.append(year)
+
+        query = f"""
+            SELECT [Hours]
+            FROM {TABLE_NAME}
+            WHERE {" AND ".join(where_clauses)};
+        """
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        for (hours,) in rows:
+            total_hours += hours
+
+        conn.close()
+        LAST_TOTAL_HOURS = total_hours
+        hours_label.configure(text=f"Total Hours: " + str(total_hours))
         return total_hours
 
     except Exception as e:
         hours_label.configure(text="Total Hours: Error")
         traceback.print_exc()
-def search_and_calculate(event=None):
-    search(edit.get(), results_tree, "Contract_Name", main_tree_data)
-    calculate_hours(edit.get())
+
+# advanced search helper
+def on_advanced_search(contract, month, year):
+    assbutt_press_and_return_contract_name(contract, month, year)
+    advanced_calculate_hours(contract, month, year)
 
 # clear search results
 def clear(tree):
@@ -322,7 +397,8 @@ def clear(tree):
         for item in tree.get_children():
             tree.delete(item)
     edit.delete(0, END)  # clear text in entry
-    hours_label.configure(text="Total Hours: 0") # clear the calculated hours
+    total_hours = 0
+    hours_label.configure(text="Total Hours: " + str(total_hours)) # clear the calculated hours
     edit.focus_set()
 cbutt.config(command=lambda: clear(results_tree))
 
@@ -348,18 +424,27 @@ def advanced_search():
     contract.pack(side=LEFT, fill=BOTH, expand=1) 
     #set focus
     contract.focus_set()
+    contract.bind("<Return>", lambda event: on_advanced_search(contract.get(), month.get(), year.get()))
     # month
     Label(pfram1, text='Month:').pack(side=LEFT)
     month = Entry(pfram1) 
     month.pack(side=LEFT, fill=BOTH, expand=1) 
+    month.bind("<Return>", lambda event: on_advanced_search(contract.get(), month.get(), year.get()))
     # year
     Label(pfram1, text='Year:').pack(side=LEFT)
     year = Entry(pfram1) 
     year.pack(side=LEFT, fill=BOTH, expand=1) 
+    year.bind("<Return>", lambda event: on_advanced_search(contract.get(), month.get(), year.get()))
     # search button
     assbutt = Button(pfram2, text='Search')  
     assbutt.pack(side=BOTTOM) 
-    assbutt.config(command=lambda: assbutt_press_and_return_contract_name(contract.get(), month.get(), year.get()))
+    assbutt.config(command=lambda: on_advanced_search(contract.get(), month.get(), year.get()))
+
+    # clear past search in regular search bar
+    edit.delete(0, END)  # clear text in entry
+
+    # grab inputs from UI
+    advanced_calculate_hours(edit.get(), month.get(), year.get())
 
 # detect when advanced search is pressed
 def advanced_search_button_press(contract, month, year):
@@ -422,7 +507,7 @@ def import_multiple_files():
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
 
-            progress.pack(padx=20, pady=10) 
+            progress.pack(padx=20, pady=10, side=LEFT) 
 
             try:
                 xls = pd.ExcelFile(file_path)
@@ -484,7 +569,7 @@ def delete_by_treeview():
 
     # existing entries treeview 
     # to display results
-    entries_tree = Treeview(popup, columns=("Entry_ID", "Employee_ID", "Month", "Year", "Contract_Name", "Project_Manager", "Hours", "Source_File"), show="headings")
+    entries_tree = Treeview(popup, columns=("Entry_ID", "Name", "Month", "Year", "Contract_Name", "Project_Manager", "Hours", "Source_File"), show="headings")
     for col in entries_tree["columns"]:
         entries_tree.heading(col, text=col)
         entries_tree.column(col, width=100)
@@ -684,7 +769,7 @@ def export_treeview_to_pdf(tree):
 
     c.setFont("Helvetica", 12)
     y_offset -= 25
-    c.drawString(x_offset, y_offset, "Generated by Timecard Vault                                                                       " + str(calculate_hours(edit.get())))
+    c.drawString(x_offset, y_offset, "Generated by Timecard Vault                                                                       " + str(LAST_TOTAL_HOURS))
     
     y_offset -= 15
     c.drawString(x_offset, y_offset, " ")
@@ -735,6 +820,7 @@ pbutt.config(command=lambda: export_treeview_to_pdf(results_tree))
 dbutt.config(command=delete_by_treeview)
 # advanced search
 asbutt.config(command=advanced_search)
+
 
 ''' Window Loop '''
 main_tree_data = load_all_data()
