@@ -65,7 +65,14 @@ def import_timecard(file_path, sheet_name=None, progress_callback=None):
                     df["Year"] = df["Year"].dropna().iloc[0]
                 except IndexError:
                     print(f"Skipping sheet '{sheet_name}' in '{file_path}' — missing Employee_ID/Month/Year")
-                    return  # skip this sheet entirely
+
+                    # popup UI warning
+                    popup = Toplevel()
+                    popup.title("Missing Data Warning")
+                    popup.geometry("400x100+150+150")
+                    Label(popup, text=f"'{sheet_name}' in {os.path.basename(file_path)}\nis missing Employee ID, Month, or Year.\nSheet skipped.", justify="center", wraplength=380).pack(pady=10)
+    
+                    return
                 
                 # remove 0s from total hours
                 df["Hours"] = pd.to_numeric(df["Hours"], errors="coerce")
@@ -441,19 +448,22 @@ def duplicate_file(file_name, sheet_name):
     cursor = conn.cursor()
     cursor.execute(
         f"""
-        SELECT 1 FROM {TABLE_NAME}
+        SELECT COUNT(*) FROM {TABLE_NAME}
         WHERE Source_File = ? AND Sheet_Name = ?
         """,
         (file_name, sheet_name),
     )
-    exists = cursor.fetchone() is not None
+    count = cursor.fetchone()[0]
     conn.close()
-    return exists
+    return count > 0
 
 # show warning for duplicate file
-def show_duplicate_warning():
+def show_duplicate_warning(message=None):
+    if message:
+        duplicate_label.config(text=message)
     duplicate_label.pack(side=RIGHT)
     root.update_idletasks()
+
 
 
 # delete functions
@@ -581,7 +591,23 @@ def delete_entries(keys):
         popup.title("Error!")
         popup.geometry("250x50+100+50")
         Label(popup, text="Error. Your file(s) were NOT deleted.").pack(side=TOP)
- 
+
+# helper function
+def delete_by_file_and_sheet(file_name, sheet_name):
+    try:
+        conn = get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"DELETE FROM {TABLE_NAME} WHERE Source_File = ? AND Sheet_Name = ?",
+            (file_name, sheet_name),
+        )
+        conn.commit()
+        conn.close()
+        print(f"Deleted all entries for {file_name} | {sheet_name}")
+    except Exception as e:
+        print(f"Error deleting sheet {sheet_name} from {file_name}: {e}")
+        traceback.print_exc()
+
 #check for file
 def file_check(file):
     contains_file = False
